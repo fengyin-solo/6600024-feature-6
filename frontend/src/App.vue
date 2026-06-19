@@ -45,20 +45,55 @@
         <div class="alarm-panel">
           <div class="alarm-header">
             <h3 class="text-lg font-bold text-yellow-400">报警事件</h3>
-            <el-button type="danger" size="small" text @click="store.clearAlarms()" v-if="store.alarms.length > 0">
-              清空
-            </el-button>
+            <div class="alarm-header-actions">
+              <el-button type="info" size="small" text @click="store.resetFilters()" v-if="hasActiveFilters">
+                重置筛选
+              </el-button>
+              <el-button type="danger" size="small" text @click="store.clearAlarms()" v-if="store.alarms.length > 0">
+                清空
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 筛选区域 -->
+          <div class="alarm-filters">
+            <div class="filter-group">
+              <label class="filter-label">严重级别</label>
+              <el-select v-model="selectedSeverity" size="small" placeholder="全部级别" class="filter-select" @change="handleSeverityChange">
+                <el-option label="全部级别" value="all" />
+                <el-option label="严重" value="Critical" />
+                <el-option label="高" value="High" />
+                <el-option label="中" value="Medium" />
+                <el-option label="低" value="Low" />
+                <el-option label="信息" value="Info" />
+              </el-select>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label">确认状态</label>
+              <el-select v-model="selectedAcknowledged" size="small" placeholder="全部状态" class="filter-select" @change="handleAcknowledgedChange">
+                <el-option label="全部状态" value="all" />
+                <el-option label="已确认" value="acknowledged" />
+                <el-option label="未确认" value="unacknowledged" />
+              </el-select>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label">节点区域</label>
+              <el-select v-model="selectedArea" size="small" placeholder="全部区域" class="filter-select" @change="handleAreaChange">
+                <el-option label="全部区域" value="all" />
+                <el-option v-for="area in availableAreas" :key="area" :label="area" :value="area" />
+              </el-select>
+            </div>
           </div>
 
           <div class="alarm-stats">
             <el-tag type="danger" size="small">严重: {{ criticalCount }}</el-tag>
             <el-tag type="warning" size="small">活跃: {{ store.activeAlarmsCount }}</el-tag>
-            <el-tag type="info" size="small">总计: {{ store.alarms.length }}</el-tag>
+            <el-tag type="info" size="small">总计: {{ store.filteredAlarms.length }}/{{ store.alarms.length }}</el-tag>
           </div>
 
           <div class="alarm-list">
             <div
-              v-for="alarm in store.alarms"
+              v-for="alarm in store.filteredAlarms"
               :key="alarm.id"
               class="alarm-item"
               :class="{
@@ -79,7 +114,10 @@
                 <span class="alarm-time">{{ formatTime(alarm.timestamp) }}</span>
               </div>
               <div class="alarm-item-body">
-                <span class="alarm-node">{{ alarm.nodeName }}</span>
+                <div class="alarm-meta">
+                  <span class="alarm-node">{{ alarm.nodeName }}</span>
+                  <el-tag size="small" type="info" class="alarm-area-tag">{{ store.getNodeArea(alarm.nodeId) }}</el-tag>
+                </div>
                 <p class="alarm-message">{{ alarm.message }}</p>
               </div>
               <el-button
@@ -93,8 +131,8 @@
               </el-button>
             </div>
 
-            <div v-if="store.alarms.length === 0" class="no-alarms">
-              <el-empty description="暂无报警" :image-size="60" />
+            <div v-if="store.filteredAlarms.length === 0" class="no-alarms">
+              <el-empty :description="store.alarms.length === 0 ? '暂无报警' : '无符合筛选条件的报警'" :image-size="60" />
             </div>
           </div>
         </div>
@@ -104,16 +142,45 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Monitor, Bell, CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { useOpcuaStore } from './store/opcua'
+import { useOpcuaStore, type SeverityFilter, type AcknowledgedFilter, type AreaFilter } from './store/opcua'
 import NodeTree from './components/NodeTree.vue'
 import DataDashboard from './components/DataDashboard.vue'
 import type { AlarmEvent } from './types'
 
 const store = useOpcuaStore()
 const updateTimer = ref<number | null>(null)
+
+// 筛选绑定值
+const selectedSeverity = ref<SeverityFilter>('all')
+const selectedAcknowledged = ref<AcknowledgedFilter>('all')
+const selectedArea = ref<AreaFilter>('all')
+
+// 获取可用区域列表
+const availableAreas = computed(() => store.getAvailableAreas())
+
+// 是否有激活的筛选
+const hasActiveFilters = computed(() => {
+  return store.severityFilter !== 'all' || store.acknowledgedFilter !== 'all' || store.areaFilter !== 'all'
+})
+
+// 同步 store 中的筛选值到本地
+watch(() => store.severityFilter, (val) => { selectedSeverity.value = val })
+watch(() => store.acknowledgedFilter, (val) => { selectedAcknowledged.value = val })
+watch(() => store.areaFilter, (val) => { selectedArea.value = val })
+
+// 筛选变更处理
+function handleSeverityChange(val: SeverityFilter) {
+  store.setSeverityFilter(val)
+}
+function handleAcknowledgedChange(val: AcknowledgedFilter) {
+  store.setAcknowledgedFilter(val)
+}
+function handleAreaChange(val: AreaFilter) {
+  store.setAreaFilter(val)
+}
 
 const criticalCount = computed(() =>
   store.alarms.filter(a => a.severity === 'Critical' && !a.acknowledged).length
@@ -264,6 +331,39 @@ onUnmounted(() => {
   margin-bottom: 12px;
 }
 
+.alarm-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.alarm-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(71, 85, 105, 0.3);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filter-label {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.filter-select {
+  width: 100%;
+}
+
 .alarm-stats {
   display: flex;
   gap: 8px;
@@ -318,10 +418,23 @@ onUnmounted(() => {
   font-family: monospace;
 }
 
+.alarm-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .alarm-node {
   font-size: 12px;
   color: #94a3b8;
   font-weight: 500;
+}
+
+.alarm-area-tag {
+  font-size: 10px;
+  padding: 0 4px;
+  height: 16px;
+  line-height: 16px;
 }
 
 .alarm-message {

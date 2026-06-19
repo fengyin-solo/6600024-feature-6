@@ -2,6 +2,10 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { OPCUANode, DataValue, AlarmEvent, SubscriptionConfig } from '../types'
 
+export type SeverityFilter = 'all' | AlarmEvent['severity']
+export type AcknowledgedFilter = 'all' | 'acknowledged' | 'unacknowledged'
+export type AreaFilter = 'all' | string
+
 export const useOpcuaStore = defineStore('opcua', () => {
   // 状态
   const nodeTree = ref<OPCUANode[]>([])
@@ -11,6 +15,11 @@ export const useOpcuaStore = defineStore('opcua', () => {
   const realTimeData = ref<Map<string, DataValue>>(new Map())
   const isConnected = ref(false)
   const dataHistory = ref<Map<string, Array<{ timestamp: number; value: number }>>>(new Map())
+
+  // 筛选状态
+  const severityFilter = ref<SeverityFilter>('all')
+  const acknowledgedFilter = ref<AcknowledgedFilter>('all')
+  const areaFilter = ref<AreaFilter>('all')
 
   // 初始化模拟节点树
   function initNodeTree() {
@@ -274,6 +283,86 @@ export const useOpcuaStore = defineStore('opcua', () => {
     isConnected.value = false
   }
 
+  // 获取节点所在的区域名称
+  function getNodeArea(nodeId: string): string {
+    function traverse(nodes: OPCUANode[], currentPath: string[] = []): string | null {
+      for (const node of nodes) {
+        const newPath = [...currentPath, node.name]
+        if (node.nodeId === nodeId || node.id === nodeId) {
+          const areaIndex = newPath.findIndex(name => name.startsWith('PLC_Area') || name.includes('Area'))
+          if (areaIndex !== -1) {
+            return newPath[areaIndex]
+          }
+          if (currentPath.length >= 2) {
+            return currentPath[currentPath.length - 1]
+          }
+          return '未知区域'
+        }
+        if (node.children) {
+          const result = traverse(node.children, newPath)
+          if (result) return result
+        }
+      }
+      return null
+    }
+    return traverse(nodeTree.value) || '未知区域'
+  }
+
+  // 获取所有可用的区域列表
+  function getAvailableAreas(): string[] {
+    const areas = new Set<string>()
+    function traverse(nodes: OPCUANode[]) {
+      for (const node of nodes) {
+        if (node.name.startsWith('PLC_Area') || node.name.includes('Area')) {
+          areas.add(node.name)
+        }
+        if (node.children) {
+          traverse(node.children)
+        }
+      }
+    }
+    traverse(nodeTree.value)
+    return Array.from(areas)
+  }
+
+  // 筛选后的报警列表
+  const filteredAlarms = computed(() => {
+    return alarms.value.filter(alarm => {
+      if (severityFilter.value !== 'all' && alarm.severity !== severityFilter.value) {
+        return false
+      }
+      if (acknowledgedFilter.value === 'acknowledged' && !alarm.acknowledged) {
+        return false
+      }
+      if (acknowledgedFilter.value === 'unacknowledged' && alarm.acknowledged) {
+        return false
+      }
+      if (areaFilter.value !== 'all') {
+        const alarmArea = getNodeArea(alarm.nodeId)
+        if (alarmArea !== areaFilter.value) {
+          return false
+        }
+      }
+      return true
+    })
+  })
+
+  // 设置筛选条件
+  function setSeverityFilter(filter: SeverityFilter) {
+    severityFilter.value = filter
+  }
+  function setAcknowledgedFilter(filter: AcknowledgedFilter) {
+    acknowledgedFilter.value = filter
+  }
+  function setAreaFilter(filter: AreaFilter) {
+    areaFilter.value = filter
+  }
+  function resetFilters() {
+    severityFilter.value = 'all'
+    acknowledgedFilter.value = 'all'
+    areaFilter.value = 'all'
+  }
+
   // 计算属性
   const activeAlarmsCount = computed(() => alarms.value.filter(a => !a.acknowledged).length)
   const criticalAlarmsCount = computed(() => alarms.value.filter(a => a.severity === 'Critical' && !a.acknowledged).length)
@@ -287,6 +376,10 @@ export const useOpcuaStore = defineStore('opcua', () => {
     realTimeData,
     isConnected,
     dataHistory,
+    // 筛选状态
+    severityFilter,
+    acknowledgedFilter,
+    areaFilter,
     // 方法
     initNodeTree,
     simulateDataUpdate,
@@ -298,8 +391,15 @@ export const useOpcuaStore = defineStore('opcua', () => {
     connect,
     disconnect,
     getAllVariableNodes,
+    getNodeArea,
+    getAvailableAreas,
+    setSeverityFilter,
+    setAcknowledgedFilter,
+    setAreaFilter,
+    resetFilters,
     // 计算属性
     activeAlarmsCount,
-    criticalAlarmsCount
+    criticalAlarmsCount,
+    filteredAlarms
   }
 })
